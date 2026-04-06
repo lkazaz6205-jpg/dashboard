@@ -1,0 +1,91 @@
+# Manufacturer limits for CH994 loader (994 F1). Replace with values from your manuals.
+# Compared to column "Valeur moyenne" in the dashboard (change in the UI if needed).
+#
+# min / max: outside → severity "critical"
+# warn_margin_pct: if warn_low / warn_high are omitted, warning band is
+#   [min + span*pct/100, max - span*pct/100] when both min and max are set.
+# You can set warn_low / warn_high explicitly instead.
+
+default_warn_margin_pct: 10
+
+parameters:
+  CH994.P1.Pression huile moteur:
+    unit: kPa
+    min: 280
+    max: 700
+
+  CH994.P1.Régime moteur:
+    unit: Tr/min
+    min: 600
+    max: 2100
+
+  CH994.P1.Température PTO avant:
+    unit: °C
+    min: 0
+    max: 95
+
+  CH994.P1.Température huile direction:
+    unit: °C
+    min: 0
+    max: 95
+
+  CH994.P1.Température huile freinage:
+    unit: °C
+    min: 0
+    max: 110
+
+  CH994.P1.Température liquide refroidissement:
+    unit: °C
+    min: 60
+    max: 105
+
+  CH994.P1.Température sortie convertisseur:
+    unit: °C
+    min: 0
+    max: 130
+
+  CH994.P1.Température échappement Droit:
+    unit: °C
+    min: 0
+    max: 580
+
+  CH994.P1.Température échappement gauche:
+    unit: °C
+    min: 0
+    max: 580
+
+  CH994.P2.Courant embrayage Lock-up:
+    unit: "%"
+    min: 0
+    max: 250
+
+  CH994.P2.Courant embrayage impeller:
+    unit: "%"
+    min: 0
+    max: 250
+
+  # Right single quotation mark (’) as in the export file
+  CH994.P2.Pression d’air au réservoir:
+    unit: kPa
+    min: 620
+    max: 950
+
+  CH994.P2.Pression embrayage impeller:
+    unit: kPa
+    min: 0
+    max: 2800
+
+  CH994.P2.Régime sortie convertisseur:
+    unit: Tr/min
+    min: 0
+    max: 2200
+
+  CH994.P2.Température Essieux avant:
+    unit: °C
+    min: 0
+    max: 85
+
+  CH994.P2.Température essieux arrière:
+    unit: °C
+    min: 0
+    max: 90
