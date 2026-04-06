@@ -324,7 +324,7 @@ def main() -> None:
                     legend=dict(orientation="h", yanchor="bottom", y=-0.45),
                     margin=dict(b=120),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 one = st.selectbox("Vue détail gravité (un seul capteur)", options=[None, *pick_params])
                 if one:
@@ -338,7 +338,7 @@ def main() -> None:
                         color_discrete_map=color_map,
                         title=f"{one} — gravité",
                     )
-                    st.plotly_chart(fig2, use_container_width=True)
+                    st.plotly_chart(fig2, width="stretch")
 
     alerts_table, interpret_md = _build_alerts_display(
         filt, thresholds, value_col, faults_df, notif_cat, lookback_days
@@ -352,7 +352,7 @@ def main() -> None:
                 f"{len(alerts_table):,} lignes — normal / warning / critical viennent du **YAML** ; "
                 "la colonne *Défaut passé possible* est une **piste** (similarité de mots, pas un diagnostic)."
             )
-            st.dataframe(alerts_table, use_container_width=True, hide_index=True)
+            st.dataframe(alerts_table, width="stretch", hide_index=True)
 
         st.subheader("Interprétation des alertes")
         st.markdown(interpret_md)
@@ -376,7 +376,7 @@ def main() -> None:
                 },
             )
             fig_b.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_b, use_container_width=True)
+            st.plotly_chart(fig_b, width="stretch")
 
     with tab_sum:
         st.subheader("Anomaly counts (non-normal only)")
@@ -384,7 +384,7 @@ def main() -> None:
         if summ.empty:
             st.success("No warnings or critical points in this window (or no thresholds configured).")
         else:
-            st.dataframe(summ, use_container_width=True, hide_index=True)
+            st.dataframe(summ, width="stretch", hide_index=True)
 
         st.subheader("Frequency by day (critical + warning)")
         bad = filt[filt["severity"] != "normal"].copy()
@@ -392,7 +392,7 @@ def main() -> None:
             bad["day"] = bad["Heure"].dt.date
             daily = bad.groupby("day").size().reset_index(name="events")
             fig_d = px.bar(daily, x="day", y="events", title="Alert events per day")
-            st.plotly_chart(fig_d, use_container_width=True)
+            st.plotly_chart(fig_d, width="stretch")
 
     with tab_help:
         st.markdown(
