@@ -1,0 +1,8 @@
+# Cloud / reverse-proxy defaults (Railway terminates TLS and forwards HTTP).
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false

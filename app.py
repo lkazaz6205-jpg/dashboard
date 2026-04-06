@@ -7,6 +7,7 @@ Run from this directory:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -23,8 +24,11 @@ from anomalies import (
 from data_loader import discover_xlsx_files, load_and_concat
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = BASE_DIR
-THRESHOLDS_PATH = BASE_DIR / "config" / "thresholds.yaml"
+# Railway: set DATA_DIR to a volume mount (e.g. /data) if Excel files are not in the image.
+DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR)))
+THRESHOLDS_PATH = Path(
+    os.environ.get("THRESHOLDS_PATH", str(BASE_DIR / "config" / "thresholds.yaml"))
+)
 
 
 @st.cache_data(show_spinner=True)
