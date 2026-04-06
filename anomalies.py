@@ -174,6 +174,81 @@ def apply_thresholds(
     return out
 
 
+def format_threshold_cell(rules: dict[str, Any] | None) -> str:
+    """Human-readable min/max for tables."""
+    if not rules:
+        return "—"
+    vmin = rules.get("min")
+    vmax = rules.get("max")
+    parts: list[str] = []
+    if vmin is not None:
+        try:
+            parts.append(f"min {float(vmin):g}")
+        except (TypeError, ValueError):
+            parts.append(f"min {vmin}")
+    if vmax is not None:
+        try:
+            parts.append(f"max {float(vmax):g}")
+        except (TypeError, ValueError):
+            parts.append(f"max {vmax}")
+    return " / ".join(parts) if parts else "—"
+
+
+def alerts_detail_dataframe(
+    df: pd.DataFrame,
+    thresholds: dict[str, dict[str, Any]],
+    *,
+    value_col: str = "Valeur moyenne",
+    param_col: str = "Paramètres Diagnostic",
+) -> pd.DataFrame:
+    """
+    One row per anomaly point in df (warning or critical) with threshold text for display.
+    """
+    if df.empty or "severity" not in df.columns:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "sensor",
+                "value",
+                "threshold_yaml",
+                "alert_level",
+                "reason",
+            ]
+        )
+    sub = df[df["severity"] != SEVERITY_NORMAL].copy()
+    if sub.empty:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "sensor",
+                "value",
+                "threshold_yaml",
+                "alert_level",
+                "reason",
+            ]
+        )
+    rows: list[dict[str, Any]] = []
+    for _, row in sub.iterrows():
+        p = row[param_col]
+        rules = thresholds.get(str(p)) if p is not None and not pd.isna(p) else None
+        v = row[value_col]
+        try:
+            v_disp = float(v) if pd.notna(v) else None
+        except (TypeError, ValueError):
+            v_disp = None
+        rows.append(
+            {
+                "date": row["Heure"] if "Heure" in sub.columns else row.name,
+                "sensor": p,
+                "value": v_disp,
+                "threshold_yaml": format_threshold_cell(rules),
+                "alert_level": row["severity"],
+                "reason": row.get("severity_reason", ""),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def anomaly_summary(df: pd.DataFrame) -> pd.DataFrame:
     """Count anomalies by parameter and severity (excludes normal)."""
     if df.empty or "severity" not in df.columns:

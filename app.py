@@ -12,19 +12,27 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from anomalies import (
     SEVERITY_CRITICAL,
     SEVERITY_WARNING,
+    alerts_detail_dataframe,
     anomaly_summary,
     apply_thresholds,
     load_thresholds,
 )
-from data_loader import discover_xlsx_files, load_and_concat
+from data_loader import (
+    discover_diagnostic_xlsx_files,
+    discover_fault_history_xlsx_files,
+    discover_notification_xlsx_files,
+    load_and_concat,
+)
+from failure_history import batch_fault_hints, load_fault_exports
+from notification_catalog import load_notification_workbook, match_notification_row
 
 BASE_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = BASE_DIR / "assets"
 # Railway: set DATA_DIR to a volume mount (e.g. /data) if Excel files are not in the image.
 DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR)))
 THRESHOLDS_PATH = Path(
@@ -39,18 +47,98 @@ def _load_selected_files(file_names: tuple[str, ...], data_dir: str) -> pd.DataF
     return load_and_concat(paths)
 
 
-def _render_header_logos() -> None:
-    """OCP Group + machine imagery at top of page (files in /assets)."""
-    ocp = ASSETS_DIR / "ocp_logo.png"
-    loader = ASSETS_DIR / "loader_994f.png"
-    if not ocp.is_file() or not loader.is_file():
-        return
-    left, right = st.columns(2, gap="large")
-    with left:
-        st.image(str(ocp), use_container_width=True)
-    with right:
-        st.image(str(loader), use_container_width=True)
-    st.divider()
+@st.cache_data(show_spinner=False)
+def _load_fault_exports_cached(paths_tuple: tuple[str, ...]) -> pd.DataFrame:
+    if not paths_tuple:
+        return pd.DataFrame(columns=["fault_code", "fault_time", "source_file"])
+    return load_fault_exports(list(paths_tuple))
+
+
+@st.cache_data(show_spinner=False)
+def _load_notification_catalog_cached(path: str) -> pd.DataFrame:
+    p = Path(path.strip())
+    if not path.strip() or not p.is_file():
+        return pd.DataFrame()
+    return load_notification_workbook(p)
+
+
+def _build_alerts_display(
+    filt: pd.DataFrame,
+    thresholds: dict,
+    value_col: str,
+    faults_df: pd.DataFrame,
+    notif_cat: pd.DataFrame,
+    lookback_days: int,
+) -> tuple[pd.DataFrame, str]:
+    """Table of alert rows + short markdown interpretation for Streamlit."""
+    sub = filt[filt["severity"] != "normal"].copy()
+    if sub.empty:
+        return pd.DataFrame(), ""
+
+    alerts = alerts_detail_dataframe(sub, thresholds, value_col=value_col)
+    hints = (
+        batch_fault_hints(sub, faults_df, lookback_days=lookback_days)
+        if not faults_df.empty
+        else [None] * len(alerts)
+    )
+    alerts["related_failure"] = hints
+
+    seuils: list[str] = []
+    crits: list[str] = []
+    for p in alerts["sensor"]:
+        m = match_notification_row(str(p), notif_cat) if not notif_cat.empty else None
+        seuils.append(str((m or {}).get("seuil", "") or ""))
+        crits.append(str((m or {}).get("criticite", "") or ""))
+    alerts["seuil_metier"] = seuils
+    alerts["criticite_metier"] = crits
+    alerts["threshold_display"] = alerts.apply(
+        lambda r: str(r["seuil_metier"]).strip() or r["threshold_yaml"], axis=1
+    )
+
+    disp = alerts[
+        [
+            "date",
+            "sensor",
+            "value",
+            "threshold_display",
+            "threshold_yaml",
+            "alert_level",
+            "criticite_metier",
+            "related_failure",
+        ]
+    ].copy()
+    disp.columns = [
+        "Date",
+        "Capteur",
+        "Valeur",
+        "Seuil (affichage)",
+        "Seuil YAML min/max",
+        "Niveau",
+        "Criticité (notification)",
+        "Défaut passé possible",
+    ]
+
+    lines: list[str] = []
+    ok_hints = alerts["related_failure"].notna()
+    paired = alerts.loc[ok_hints]
+    if not paired.empty:
+        uniq = paired.drop_duplicates(subset=["sensor", "related_failure"]).head(12)
+        for _, r in uniq.iterrows():
+            hint = r["related_failure"]
+            lines.append(
+                f"- **{r['sensor']}** — cette anomalie peut être rapprochée d’un défaut déjà vu : "
+                f"« {hint} » (mots communs avec l’historique codes, fenêtre **{lookback_days}** jours "
+                "avant la date de l’alerte)."
+            )
+    if not notif_cat.empty:
+        lines.append(
+            "- *Seuil (affichage)* reprend le **Seuil** du fichier notification lorsque l’intitulé "
+            "correspond au capteur ; sinon on affiche les limites **YAML** utilisées pour le calcul."
+        )
+    body = "\n".join(lines) if lines else (
+        "Aucune alerte dans la fenêtre sélectionnée, ou historique de codes non chargé / sans correspondance textuelle."
+    )
+    return disp, body
 
 
 def main() -> None:
@@ -60,32 +148,61 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
-    _render_header_logos()
-
     st.title("Loader diagnostics dashboard (994 F1)")
     st.caption(
         "Historical diagnostic parameters from Excel exports. "
-        "Anomalies use configurable min/max thresholds (manufacturer-style)."
+        "Anomalies use YAML min/max thresholds; optional fault history and notification "
+        "workbooks add interpretation."
     )
 
     with st.sidebar:
         st.header("Data")
         data_dir = st.text_input("Data folder", value=str(DEFAULT_DATA_DIR))
-        files = discover_xlsx_files(Path(data_dir))
-        if not files:
-            st.error("No .xlsx files in that folder.")
+
+    dpath = Path(data_dir)
+    with st.sidebar:
+        diag_files = discover_diagnostic_xlsx_files(dpath)
+        fault_candidates = discover_fault_history_xlsx_files(dpath)
+        notif_candidates = discover_notification_xlsx_files(dpath)
+
+        if not diag_files:
+            st.error("No diagnostic .xlsx files in that folder (need Engin / Paramètres Diagnostic).")
             st.stop()
 
-        default_pick = [f.name for f in files if not f.name.startswith("~$")]
+        default_diag = [f.name for f in diag_files]
         selected = st.multiselect(
-            "Excel files to load",
-            options=[f.name for f in files],
-            default=default_pick,
-            help="Large files take a moment on first load (cached afterward).",
+            "Diagnostic Excel files (time series)",
+            options=[f.name for f in diag_files],
+            default=default_diag,
+            help="Only Caterpillar-style parameter exports. Fault-code files are chosen separately.",
         )
         if not selected:
-            st.warning("Select at least one file.")
+            st.warning("Select at least one diagnostic file.")
             st.stop()
+
+        st.subheader("Fault history (optional)")
+        default_faults = [f.name for f in fault_candidates]
+        fault_selected = st.multiselect(
+            "Fault / event code exports",
+            options=[f.name for f in fault_candidates],
+            default=default_faults,
+            help="Used to suggest 'related past fault' text when a sensor is in warning/critical.",
+        )
+        lookback_days = st.slider(
+            "Fault match lookback (days)",
+            min_value=30,
+            max_value=730,
+            value=540,
+            help="When linking an alert to a past fault, only faults before that alert and within this window are used.",
+        )
+
+        st.subheader("Notification seuils (optional)")
+        notif_default = str(notif_candidates[0]) if notif_candidates else ""
+        notification_path = st.text_input(
+            "Notification Excel path",
+            value=notif_default,
+            help="Workbook with Paramètre + Seuil + Criticité (e.g. notification Alerte Engins).",
+        )
 
         thresholds_path = st.text_input("Thresholds YAML", value=str(THRESHOLDS_PATH))
         value_col = st.selectbox(
@@ -119,6 +236,10 @@ def main() -> None:
         default_warn_margin_pct=float(warn_margin),
     )
 
+    fault_paths = tuple(str(dpath / n) for n in sorted(fault_selected) if n)
+    faults_df = _load_fault_exports_cached(fault_paths)
+    notif_cat = _load_notification_catalog_cached(notification_path.strip())
+
     params = sorted(scored["Paramètres Diagnostic"].dropna().unique().tolist())
     t_min = scored["Heure"].min()
     t_max = scored["Heure"].max()
@@ -149,8 +270,8 @@ def main() -> None:
     c3.metric("Warning points", f"{n_warn:,}")
     c4.metric("Parameters", len(params))
 
-    tab_ts, tab_anom, tab_sum, tab_help = st.tabs(
-        ["Time series", "Anomaly map", "Summary", "Architecture & ML notes"]
+    tab_ts, tab_alerts, tab_anom, tab_sum, tab_help = st.tabs(
+        ["Time series", "Alerts & interpretation", "Anomaly map", "Summary", "Architecture & ML notes"]
     )
 
     with tab_ts:
@@ -161,19 +282,51 @@ def main() -> None:
             if sub.empty:
                 st.warning("No rows in the selected date range.")
             else:
-                fig = px.line(
-                    sub,
-                    x="Heure",
-                    y=value_col,
-                    color="Paramètres Diagnostic",
-                    markers=False,
-                    title=f"{value_col} over time",
+                palette = px.colors.qualitative.Plotly
+                fig = go.Figure()
+                for i, param in enumerate(pick_params):
+                    s = sub[sub["Paramètres Diagnostic"] == param]
+                    if s.empty:
+                        continue
+                    color = palette[i % len(palette)]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=s["Heure"],
+                            y=s[value_col],
+                            mode="lines",
+                            name=str(param),
+                            line=dict(color=color, width=1.8),
+                            legendgroup=str(param),
+                        )
+                    )
+                    bad = s[s["severity"] != "normal"]
+                    if not bad.empty:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=bad["Heure"],
+                                y=bad[value_col],
+                                mode="markers",
+                                name=f"{param} (alerte)",
+                                marker=dict(
+                                    size=11,
+                                    color=bad["severity"].map(
+                                        {"warning": "#f59e0b", "critical": "#ef4444"}
+                                    ),
+                                    symbol="circle-open",
+                                    line=dict(width=2),
+                                ),
+                                legendgroup=str(param),
+                            )
+                        )
+                fig.update_layout(
+                    title=f"{value_col} dans le temps (marqueurs = avertissement ou critique)",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.45),
+                    margin=dict(b=120),
                 )
-                fig.update_layout(hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=-0.4))
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Optional: show severity as scatter overlay for one parameter
-                one = st.selectbox("Highlight severity (single parameter)", options=[None, *pick_params])
+                one = st.selectbox("Vue détail gravité (un seul capteur)", options=[None, *pick_params])
                 if one:
                     s1 = sub[sub["Paramètres Diagnostic"] == one]
                     color_map = {"normal": "#94a3b8", "warning": "#f59e0b", "critical": "#ef4444"}
@@ -183,9 +336,26 @@ def main() -> None:
                         y=value_col,
                         color="severity",
                         color_discrete_map=color_map,
-                        title=f"{one} — severity",
+                        title=f"{one} — gravité",
                     )
                     st.plotly_chart(fig2, use_container_width=True)
+
+    alerts_table, interpret_md = _build_alerts_display(
+        filt, thresholds, value_col, faults_df, notif_cat, lookback_days
+    )
+    with tab_alerts:
+        st.subheader("Table des alertes")
+        if alerts_table.empty:
+            st.success("Aucun point en avertissement ou critique dans cette fenêtre.")
+        else:
+            st.caption(
+                f"{len(alerts_table):,} lignes — normal / warning / critical viennent du **YAML** ; "
+                "la colonne *Défaut passé possible* est une **piste** (similarité de mots, pas un diagnostic)."
+            )
+            st.dataframe(alerts_table, use_container_width=True, hide_index=True)
+
+        st.subheader("Interprétation des alertes")
+        st.markdown(interpret_md)
 
     with tab_anom:
         st.subheader("Points by severity (filtered window)")
@@ -245,23 +415,30 @@ def main() -> None:
 ```mermaid
 flowchart LR
   subgraph sources [Sources]
-    XLSX[Excel exports]
+    XLSX[Séries diag Excel]
     YAML[thresholds.yaml]
+    FAULT[Exports codes anomalie]
+    NOTIF[Seuils notification]
   end
   subgraph app [App]
     L[Loader / cache]
-    A[Threshold engine]
-    V[Streamlit views]
+    A[Moteur seuils YAML]
+    H[Historique codes]
+    V[Streamlit]
   end
   XLSX --> L
   YAML --> A
+  FAULT --> H
+  NOTIF --> V
   L --> A
   A --> V
+  H --> V
 ```
 
-1. **Ingest:** `data_loader.py` normalizes different export layouts and concatenates months.  
-2. **Rules:** `anomalies.py` labels each row using per-parameter min/max and warning bands.  
-3. **Presentation:** `app.py` filters, plots, and aggregates.
+1. **Ingest:** `data_loader.py` détecte la ligne d’en-tête et concatène les mois.  
+2. **Seuils:** `anomalies.py` classe chaque point (normal / warning / critical) avec le YAML.  
+3. **Contexte:** `failure_history.py` et `notification_catalog.py` enrichissent le tableau d’alertes.  
+4. **PARETO / réparations** (fichier type chargeuse / D11T) : mise en page narrative — pas encore lue automatiquement ; à intégrer plus tard si vous normalisez les colonnes.
 
 Later, swap step 2 for an **ML scoring** column (keep the same UI by merging `severity_ml` next to `severity`).
 

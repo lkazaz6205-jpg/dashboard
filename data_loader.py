@@ -22,6 +22,53 @@ def discover_xlsx_files(data_dir: Path, *, pattern: str = "*.xlsx") -> list[Path
     return sorted(data_dir.glob(pattern))
 
 
+def discover_diagnostic_xlsx_files(data_dir: Path) -> list[Path]:
+    """Excel files whose first detected header row looks like a diagnostic parameter export."""
+    out: list[Path] = []
+    for p in discover_xlsx_files(data_dir):
+        if p.name.startswith("~$"):
+            continue
+        try:
+            header = _detect_header_row(p)
+            peek = pd.read_excel(p, sheet_name=0, header=header, nrows=1, engine="openpyxl")
+            if EXPECTED_COLS <= set(peek.columns):
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def discover_fault_history_xlsx_files(data_dir: Path) -> list[Path]:
+    """Excel exports with a 'Code d'anomalie' column (fault / event history)."""
+    out: list[Path] = []
+    for p in discover_xlsx_files(data_dir):
+        if p.name.startswith("~$"):
+            continue
+        try:
+            peek = pd.read_excel(p, sheet_name=0, header=0, nrows=1, engine="openpyxl")
+            if "Code d'anomalie" in peek.columns and "Date de l'anomalie" in peek.columns:
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def discover_notification_xlsx_files(data_dir: Path) -> list[Path]:
+    """Workbooks that look like the 'notification / seuils métier' template (Paramètre + Seuil)."""
+    out: list[Path] = []
+    for p in discover_xlsx_files(data_dir):
+        if p.name.startswith("~$"):
+            continue
+        try:
+            peek = pd.read_excel(p, sheet_name=0, header=1, nrows=2, engine="openpyxl")
+            cols = [str(c).strip() for c in peek.columns]
+            if "Paramètre" in cols and "Seuil" in cols:
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
 def _detect_header_row(path: Path, *, max_scan_rows: int = 40) -> int:
     peek = pd.read_excel(
         path,
