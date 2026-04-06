@@ -24,6 +24,7 @@ from anomalies import (
 from data_loader import discover_xlsx_files, load_and_concat
 
 BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
 # Railway: set DATA_DIR to a volume mount (e.g. /data) if Excel files are not in the image.
 DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR)))
 THRESHOLDS_PATH = Path(
@@ -38,12 +39,28 @@ def _load_selected_files(file_names: tuple[str, ...], data_dir: str) -> pd.DataF
     return load_and_concat(paths)
 
 
+def _render_header_logos() -> None:
+    """OCP Group + machine imagery at top of page (files in /assets)."""
+    ocp = ASSETS_DIR / "ocp_logo.png"
+    loader = ASSETS_DIR / "loader_994f.png"
+    if not ocp.is_file() or not loader.is_file():
+        return
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.image(str(ocp), use_container_width=True)
+    with right:
+        st.image(str(loader), use_container_width=True)
+    st.divider()
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Loader digital twin — diagnostics",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    _render_header_logos()
 
     st.title("Loader diagnostics dashboard (994 F1)")
     st.caption(
